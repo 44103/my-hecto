@@ -15,6 +15,9 @@ impl Editor {
             if self.should_quit {
                 break;
             }
+            if let Err(error) = self.process_keypress() {
+                die(error);
+            }
         }
     }
 
