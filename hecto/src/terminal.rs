@@ -1,11 +1,10 @@
+use crate::Position;
 use std::io::{self, stdout, Write};
 use termion::{
     event::Key,
     input::TermRead,
     raw::{IntoRawMode, RawTerminal},
 };
-
-use crate::editor::Position;
 
 pub struct Size {
     pub width: u16,

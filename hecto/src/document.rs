@@ -1,6 +1,5 @@
-use std::fs;
-
 use crate::Row;
+use std::fs;
 
 #[derive(Default)]
 pub struct Document {
@@ -23,5 +22,9 @@ impl Document {
 
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.rows.len()
     }
 }
