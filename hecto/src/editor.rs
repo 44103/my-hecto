@@ -10,6 +10,7 @@ use termion::{color, event::Key};
 const STATUS_FG_COLOR: color::Rgb = color::Rgb(63, 63, 63);
 const STATUS_BG_COLOR: color::Rgb = color::Rgb(239, 239, 239);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const QUIT_TIMES: u8 = 3;
 
 #[derive(Default)]
 pub struct Position {
@@ -38,6 +39,7 @@ pub struct Editor {
     offset: Position,
     document: Document,
     status_message: StatusMessage,
+    quit_times: u8,
 }
 
 impl Editor {
@@ -57,12 +59,11 @@ impl Editor {
 
     pub fn default() -> Self {
         let args: Vec<String> = env::args().collect();
-        let mut initial_status = String::from("HELP: Ctrl-Q = quit");
-        let document = if args.len() > 1 {
-            let filename = &args[1];
+        let mut initial_status = String::from("HELP: Ctrl-S = save | Ctrl-Q = quit");
+        let document = if let Some(filename) = args.get(1) {
             let doc = Document::open(filename);
-            if doc.is_ok() {
-                doc.unwrap()
+            if let Ok(doc) = doc {
+                doc
             } else {
                 initial_status = format!("ERR: Could not open file: {filename}");
                 Document::default()
@@ -77,6 +78,7 @@ impl Editor {
             cursor_position: Position::default(),
             offset: Position::default(),
             status_message: StatusMessage::from(initial_status),
+            quit_times: QUIT_TIMES,
         }
     }
 
@@ -99,11 +101,49 @@ impl Editor {
         Terminal::flush()
     }
 
+    fn save(&mut self) {
+        if self.document.filename.is_none() {
+            let new_name = self.prompt("Save as: ").unwrap_or(None);
+            if new_name.is_none() {
+                self.status_message = StatusMessage::from("Save aborted.".to_string());
+                return;
+            }
+            self.document.filename = new_name;
+        }
+        if self.document.save().is_ok() {
+            self.status_message = StatusMessage::from("File saved successfully.".to_string());
+        } else {
+            self.status_message = StatusMessage::from("Error writing file!".to_string());
+        }
+    }
+
     fn process_keypress(&mut self) -> Result<(), std::io::Error> {
         let pressed_key = Terminal::read_key()?;
 
         match pressed_key {
-            Key::Ctrl('q') => self.should_quit = true,
+            Key::Ctrl('q') => {
+                if self.quit_times > 0 && self.document.is_dirty() {
+                    self.status_message = StatusMessage::from(format!(
+                        "WARNING! File has unsaved changes. Press Ctrl-Q {} more times to quit.",
+                        self.quit_times
+                    ));
+                    self.quit_times -= 1;
+                    return Ok(());
+                }
+                self.should_quit = true;
+            }
+            Key::Ctrl('s') => self.save(),
+            Key::Char(c) => {
+                self.document.insert(&self.cursor_position, c);
+                self.move_cursor(Key::Right);
+            }
+            Key::Delete => self.document.delete(&self.cursor_position),
+            Key::Backspace => {
+                if self.cursor_position.x > 0 || self.cursor_position.y > 0 {
+                    self.move_cursor(Key::Left);
+                    self.document.delete(&self.cursor_position);
+                }
+            }
             Key::Up
             | Key::Down
             | Key::Left
@@ -115,6 +155,10 @@ impl Editor {
             _ => (),
         }
         self.scroll();
+        if self.quit_times < QUIT_TIMES {
+            self.quit_times = QUIT_TIMES;
+            self.status_message = StatusMessage::from(String::new());
+        }
         Ok(())
     }
 
@@ -173,14 +217,14 @@ impl Editor {
             }
             Key::PageUp => {
                 y = if y > terminal_height {
-                    y - terminal_height
+                    y.saturating_sub(terminal_height)
                 } else {
                     0
                 }
             }
             Key::PageDown => {
                 y = if y < terminal_height {
-                    y + terminal_height as usize
+                    y.saturating_add(terminal_height)
                 } else {
                     height
                 }
@@ -204,6 +248,7 @@ impl Editor {
         let mut welcome_message = format!("Hecto editor -- version {}\r", VERSION);
         let width = self.terminal.size().width as usize;
         let len = welcome_message.len();
+        #[allow(clippy::integer_arithmetic, clippy::integer_division)]
         let padding = width.saturating_sub(len) / 2;
         let spaces = " ".repeat(padding.saturating_sub(1));
         welcome_message = format!("~{spaces}{welcome_message}");
@@ -214,16 +259,20 @@ impl Editor {
     pub fn draw_row(&self, row: &Row) {
         let width = self.terminal.size().width as usize;
         let start = self.offset.x;
-        let end = self.offset.x + width;
+        let end = self.offset.x.saturating_add(width);
         let row = row.render(start, end);
         println!("{row}\r");
     }
 
+    #[allow(clippy::integer_arithmetic, clippy::integer_division)]
     fn draw_rows(&self) {
         let height = self.terminal.size().height;
         for terminal_row in 0..height {
             Terminal::clear_current_line();
-            if let Some(row) = self.document.row(terminal_row as usize + self.offset.y) {
+            if let Some(row) = self
+                .document
+                .row(self.offset.y.saturating_add(terminal_row as usize))
+            {
                 self.draw_row(row);
             } else if self.document.is_empty() && terminal_row == height / 3 {
                 self.draw_welcome_message();
@@ -236,21 +285,30 @@ impl Editor {
     fn draw_status_bar(&self) {
         let mut status;
         let width = self.terminal.size().width as usize;
+        let modified_indicator = if self.document.is_dirty() {
+            " (modified)"
+        } else {
+            ""
+        };
         let mut filename = "[No Name]".to_string();
         if let Some(name) = &self.document.filename {
             filename = name.clone();
             filename.truncate(20);
         }
-        status = format!("{} - {} lines", filename, self.document.len());
+        status = format!(
+            "{} - {} lines{}",
+            filename,
+            self.document.len(),
+            modified_indicator
+        );
         let line_indicator = format!(
             "{}/{}",
             self.cursor_position.y.saturating_add(1),
             self.document.len()
         );
+        #[allow(clippy::integer_arithmetic)]
         let len = status.len() + line_indicator.len();
-        if width > len {
-            status.push_str(&" ".repeat(width - len));
-        }
+        status.push_str(&" ".repeat(width.saturating_sub(len)));
         status = format!("{}{}", status, line_indicator);
         status.truncate(width);
         Terminal::set_bg_color(STATUS_BG_COLOR);
@@ -268,6 +326,33 @@ impl Editor {
             text.truncate(self.terminal.size().width as usize);
             print!("{text}");
         }
+    }
+
+    fn prompt(&mut self, prompt: &str) -> Result<Option<String>, std::io::Error> {
+        let mut result = String::new();
+        loop {
+            self.status_message = StatusMessage::from(format!("{prompt}{result}"));
+            self.refresh_screen()?;
+            match Terminal::read_key()? {
+                Key::Backspace => result.truncate(result.len().saturating_sub(1)),
+                Key::Char('\n') => break,
+                Key::Char(c) => {
+                    if !c.is_control() {
+                        result.push(c);
+                    }
+                }
+                Key::Esc => {
+                    result.truncate(0);
+                    break;
+                }
+                _ => (),
+            }
+        }
+        self.status_message = StatusMessage::from(String::new());
+        if result.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(result))
     }
 }
 
