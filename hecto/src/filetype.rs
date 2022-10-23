@@ -7,6 +7,7 @@ pub struct FileType {
 pub struct HighlightingOptions {
     numbers: bool,
     strings: bool,
+    characters: bool,
 }
 
 impl Default for FileType {
@@ -15,16 +16,6 @@ impl Default for FileType {
             name: String::from("No filetype"),
             hl_ops: HighlightingOptions::default(),
         }
-    }
-}
-
-impl HighlightingOptions {
-    pub fn numbers(self) -> bool {
-        self.numbers
-    }
-
-    pub fn strings(self) -> bool {
-        self.strings
     }
 }
 
@@ -44,9 +35,24 @@ impl FileType {
                 hl_ops: HighlightingOptions {
                     numbers: true,
                     strings: true,
+                    characters: true,
                 },
             };
         }
         Self::default()
+    }
+}
+
+impl HighlightingOptions {
+    pub fn numbers(self) -> bool {
+        self.numbers
+    }
+
+    pub fn strings(self) -> bool {
+        self.strings
+    }
+
+    pub fn characters(self) -> bool {
+        self.characters
     }
 }
